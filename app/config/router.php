@@ -4,20 +4,11 @@ $router = $di->getRouter();
 
 // Define a route
 $router->add(
-    '/tenders/download',
+    '/tenders/manage_queue/:int',
     [
         'controller' => 'tenders',
-        'action'     => 'download',
-    ]
-);
-
-$router->add(
-    '/tenders/manage_queue/([0-9]{1-5})',
-    [
-        'controller'     => 'tenders',
-        'action'         => 'test',
+        'action'     => 'manage_queue',
         'page'        =>  1,
     ]
 );
-
 $router->handle();

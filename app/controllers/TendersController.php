@@ -1,6 +1,9 @@
 <?php
 
-use Phalcon\Queue\Beanstalk;
+//use Phalcon\Queue\Beanstalk;
+require_once(APP_PATH.'/vendor/autoload.php');
+use PhpAmqpLib\Connection\AMQPStreamConnection;
+use PhpAmqpLib\Message\AMQPMessage;
 error_reporting(E_ALL);
 ini_set('display_errors', 1);
 set_time_limit(0);
@@ -8,19 +11,22 @@ Class TendersController extends ControllerBase
 {
     public function initialize (){
     }
+
     public function cleanup ($var) {
         $var = strip_tags($var);
         $var = trim($var," ");
         return $var;
     }
+
     public function curlDownload($page, $records_p_page) {
+        //die($page);
         // Get cURL resource
         $curl = curl_init();
         // Set some options - we are passing in a useragent too here
         curl_setopt_array($curl, array(
             CURLOPT_RETURNTRANSFER => 1,
             CURLOPT_URL => 'https://www.goszakup.gov.kz/ru/search/lots?count_record='.$records_p_page.'&page='.$page.'',
-            CURLOPT_USERAGENT => 'Codular Sample cURL Request',
+            CURLOPT_USERAGENT => 'Mozilla/5.0 (Windows NT 6.1; WOW64; rv:54.0) Gecko/20100101 Firefox/54.0',
             CURLOPT_SSL_VERIFYPEER => false
         ));
         // Send the request & save response to $resp
@@ -31,37 +37,58 @@ Class TendersController extends ControllerBase
         $ret_arr['curl'] = $curl;
         return $ret_arr;
     }
+
+    public function execute($page)
+    {
+        $connection = new AMQPStreamConnection(
+            'localhost',    #host - host name where the RabbitMQ server is runing
+            5672,           #port - port number of the service, 5672 is the default
+            'guest',        #user - username to connect to server
+            'guest'         #password
+        );
+        /** @var $channel AMQPChannel */
+        $channel = $connection->channel();
+        $channel->queue_declare(
+            'TendersTime',    #queue name - Queue names may be up to 255 bytes of UTF-8 characters
+            false,          #passive - can use this to check whether an exchange exists without modifying the server state
+            false,          #durable - make sure that RabbitMQ will never lose our queue if a crash occurs - the queue will survive a broker restart
+            false,          #exclusive - used by only one connection and the queue will be deleted when that connection closes
+            false           #autodelete - queue is deleted when last consumer unsubscribes
+        );
+
+        $pg = new AMQPMessage($page);
+        $channel->basic_publish(
+            $pg,           #message
+            '',             #exchange
+            'TendersTime'     #routing key
+        );
+
+        $channel->close();
+        $connection->close();
+    }
+
     public function downloadAction() {
-        $queue = new Beanstalk();
         $page=5000;
-        $j=0;
-        while ($page>=4500) {
-            $j++;
-            //$jobId = $queue->put(['page'=>$page], ['priority'=>$j,'delay'=>5, 'ttr'=>'2400']);
-            $jobId = $queue->put(['page'=>$page], ['priority'=>$j]);
-            echo 'jobID: '.$jobId."<br>";
-            //$this->manage_queue($page);
+        while ($page>=1) {
+            $this->execute($page);
             $page--;
         }
     }
     public function manage_queueAction($page) {
-        echo 'start: '.date("H:i:s")."<br>";
+        echo '<b>start:</b> '.date("H:i:s")."<br>";
         $records_p_page = 100;
         $db = $this->getDi()->getShared('db');
         if (!$db) {
             die('db connection failed');
         }
         require_once ($_SERVER['DOCUMENT_ROOT'].'/simple_html_dom/simple_html_dom.php');
+        $page = $this->dispatcher->getParam('page');
         $resp = $this->curlDownload($page, $records_p_page);
         if( $resp['resp']){
             $html = new simple_html_dom();
             $html->load($resp['resp']);
             $this->db->begin();
             for ($i=1;$i<=$records_p_page;$i++) {
-                /*$data           = $html->find('table[id=search-result] tr',$i);
-                $lotN           = $data->find('strong[data-info]',0);
-                $arr[]          = $lotN;
-                echo $lotN."<br>";*/
                 $data = $html->find('table[id=search-result] tr', $i);
 
                 $lotLong = $this->cleanup($data->find('strong[data-info]', 0));
@@ -76,11 +103,15 @@ Class TendersController extends ControllerBase
                 $td3 = $data->find('td', 2);
                 $descr_html = $td3->find('small[class=hidden-xs]', 0);
                 // <br.*?\/> because in original tag extra space ((
-                preg_match("/(.*?)<br.*?\/>/i", $descr_html, $match_descr);
+                if (!preg_match("/(.*?)<br.*?\/>/i", $descr_html, $match_descr)) {
+                    $match_descr[0] = '';
+                }
                 $descr = $this->cleanup($match_descr[0]);
                 $amount = $this->cleanup($data->find('td', 3));
-                preg_match("/<\/b(.*?)<br>/i", $td3, $app_arr);
-                $app_amount = $this->cleanup($app_arr[0]) ?:0 ;
+                if (!preg_match("/<\/b(.*?)<br>/i", $td3, $app_arr)) {
+                    $app_arr[0] = 0;
+                }
+                $app_amount = $this->cleanup($app_arr[0]) ;
                 $price_per_unit = $this->cleanup($data->find('td', 4)->find('strong', 0));
                 $price_per_unit = $this->cleanup(preg_replace('/\s+/', '', $price_per_unit));
                 $summ = $this->cleanup($data->find('td', 5)->find('strong', 0));
@@ -107,12 +138,11 @@ Class TendersController extends ControllerBase
                     $tenders-> status           =   $status;
                     if  ($tenders->save() == false) {
                         foreach ($tenders->getMessages() as $message) {
-                            echo $message."<br>";
+                            echo "saving error: ".$message."<br>";
                         }
-                        //$this->db->rollback();
-                        //echo "rollback <br>";
+                        $this->db->rollback();
                     } else {
-                        echo $lotLong. '<br>';
+                        echo "Lot saved: " .$lotLong. '<br>';
                     }
                 }
                 /*$sql = 'select lotLong from tenders where lotLong = "' . $lotLong . '"';
@@ -132,7 +162,7 @@ Class TendersController extends ControllerBase
                         echo $lotLong. '<br>';
                     }
                 }*/
-                //echo $lotLong. '<br>'.$lotShort[0]. '<br>'.$lotName.'<br>'. $cust.'<br/>';
+                //echo $lotLong. '<br>'.$lotShort[0]. '<br>'.$lotName.'<br>'. $cust.'<br>';
             }
             $this->db->commit();
             $html->clear();
@@ -141,7 +171,6 @@ Class TendersController extends ControllerBase
             $err = $resp['curl'];
             die('Error: "' . curl_error($err) . '" - Code: ' . curl_errno($err));
         }
-        echo 'end: '.date("H:i:s")."<br>";
-
+        echo '<b>end:</b> '.date("H:i:s")."<br>";
     }
 }

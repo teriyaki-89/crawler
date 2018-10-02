@@ -114,7 +114,7 @@ $di->setShared('session', function () {
 /**
  * Queue to deliver e-mails in real-time
  */
-$di->set(
+/*$di->set(
     'queue',
     function () use ($config) {
         if (isset($config->beanstalk->disabled) && $config->beanstalk->disabled) {
@@ -126,4 +126,4 @@ $di->set(
         return new Beanstalk(['host' => $config->beanstalk->host]);
     },
     true
-);
+);*/
