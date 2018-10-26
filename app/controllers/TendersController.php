@@ -1,4 +1,6 @@
 <?php
+ini_set('memory_limit', '-1');
+header('Access-Control-Allow-Origin: *');
 
 //use Phalcon\Queue\Beanstalk;
 require_once(APP_PATH.'/vendor/autoload.php');
@@ -16,6 +18,51 @@ Class TendersController extends ControllerBase
         $var = strip_tags($var);
         $var = trim($var," ");
         return $var;
+    }
+    public function getPagiAction() {
+        $db = $this->getDi()->getShared('db');
+        if (!$db) {
+            die('db connection failed');
+        }
+        $tenders = new Tenders();
+        //$count = count($tenders->find());
+        $query = "select count(*) as count from tenders";
+        $search =  $this->dispatcher->getParam('search');
+        if (!empty($search)) {
+            $query = "select count(*) as count from Tenders where lotLong like '%".$search."%'";
+        }
+        $res = $this->modelsManager->executeQuery($query)->getFirst();
+        $count =  $res ['count'];
+        $perPage = $this->dispatcher->getParam('perPage');
+        $totalPages = ceil( $count / $perPage);
+        $pg_arr['count'] = $count;
+        $pg_arr['totalPages'] = $totalPages;
+        return json_encode($pg_arr);
+    }
+    public function showDataAction() {
+        $db = $this->getDi()->getShared('db');
+        if (!$db) {
+            die('db connection failed');
+        }
+        $perPage = $this->dispatcher->getParam('perPage');
+        $page = $this->dispatcher->getParam('page');
+        $tenders = new Tenders();
+        if ( !empty($page) ) {
+            $offset = ($page-1)* $perPage;
+            $offset < 0 ? 0 : $offset;
+
+            /*foreach ($results as $result) {
+                //echo $result->lotShort."<br>";
+                //$json= json_encode($result, JSON_UNESCAPED_UNICODE);
+            }*/
+            $search =  $this->dispatcher->getParam('search');
+            if ( !empty($search)) {
+                $results = $tenders->find(["conditions" => "lotLong like '%".$search."%'" ]);
+            } else {
+                $results = $tenders->find(['offset'=> $offset, 'limit'=> $perPage ]);
+            }
+            return $this->response->setJsonContent($results, JSON_UNESCAPED_UNICODE);
+        }
     }
 
     public function curlDownload($page, $records_p_page) {
